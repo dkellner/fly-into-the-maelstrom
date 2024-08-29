@@ -12,3 +12,7 @@ serde_with = "3.9.0"
 [[bin]]
 name = "echo"
 path = "src/bin/echo.rs"
+
+[[bin]]
+name = "unique-ids"
+path = "src/bin/unique_ids.rs"

@@ -10,10 +10,7 @@ pub trait InitializedNode {
     type ResponseBody: Serialize + for<'a> Deserialize<'a>;
 
     fn new(id: NodeId, all_nodes: Box<[NodeId]>) -> Self;
-    fn handle(
-        &mut self,
-        request: Message<Self::RequestBody>,
-    ) -> Option<Message<Self::ResponseBody>>;
+    fn handle(&mut self, request: Message<Self::RequestBody>) -> Vec<Message<Self::ResponseBody>>;
 }
 
 pub fn run_node<N: InitializedNode>() -> anyhow::Result<()> {
@@ -27,7 +24,7 @@ pub fn run_node<N: InitializedNode>() -> anyhow::Result<()> {
 
     for line in lines {
         let request: Message<N::RequestBody> = serde_json::from_str(&line?)?;
-        if let Some(response) = node.handle(request) {
+        for response in node.handle(request) {
             serde_json::to_writer(&mut stdout, &response)?;
             stdout.write_all(&[b'\n'])?;
         }

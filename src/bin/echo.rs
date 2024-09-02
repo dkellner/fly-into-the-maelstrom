@@ -43,9 +43,9 @@ impl InitializedNode for EchoNode {
         }
     }
 
-    fn handle(&mut self, request: Message<RequestBody>) -> Option<Message<ResponseBody>> {
+    fn handle(&mut self, request: Message<RequestBody>) -> Vec<Message<ResponseBody>> {
         let RequestBody::Echo(body) = request.body;
-        Some(Message {
+        vec![Message {
             src: self.id,
             dest: request.src,
             body: ResponseBody::EchoOk(EchoOkBody {
@@ -56,7 +56,7 @@ impl InitializedNode for EchoNode {
                 in_reply_to: body.msg_id,
                 echo: body.echo,
             }),
-        })
+        }]
     }
 }
 

@@ -60,9 +60,9 @@ impl InitializedNode for UniqueIdsNode {
         }
     }
 
-    fn handle(&mut self, request: Message<RequestBody>) -> Option<Message<ResponseBody>> {
+    fn handle(&mut self, request: Message<RequestBody>) -> Vec<Message<ResponseBody>> {
         let RequestBody::Generate(body) = request.body;
-        Some(Message {
+        vec![Message {
             src: self.id,
             dest: request.src,
             body: ResponseBody::GenerateOk(GenerateOkBody {
@@ -73,7 +73,7 @@ impl InitializedNode for UniqueIdsNode {
                 in_reply_to: body.msg_id,
                 id: self.next_unique_id(),
             }),
-        })
+        }]
     }
 }
 

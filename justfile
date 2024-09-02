@@ -25,3 +25,11 @@ maelstrom-unique-ids:
       --node-count 3 \
       --availability total \
       --nemesis partition
+
+maelstrom-broadcast:
+    cargo build --bin broadcast && \
+    maelstrom test -w broadcast \
+      --bin "$CARGO_TARGET_DIR/debug/broadcast" \
+      --time-limit 20 \
+      --rate 10 \
+      --node-count 1

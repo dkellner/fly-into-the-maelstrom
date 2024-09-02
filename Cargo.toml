@@ -16,3 +16,7 @@ path = "src/bin/echo.rs"
 [[bin]]
 name = "unique-ids"
 path = "src/bin/unique_ids.rs"
+
+[[bin]]
+name = "broadcast"
+path = "src/bin/broadcast.rs"

@@ -14,6 +14,16 @@ pub struct Message<B> {
     pub body: B,
 }
 
+impl<B> Message<B> {
+    pub fn mapped<C: From<B>>(self) -> Message<C> {
+        Message {
+            src: self.src,
+            dest: self.dest,
+            body: self.body.into(),
+        }
+    }
+}
+
 #[derive(PartialEq, Eq, Clone, Copy, Debug, Serialize, Deserialize)]
 pub struct MessageId(u64);
 

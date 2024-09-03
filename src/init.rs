@@ -1,52 +1,54 @@
-use std::io::Write;
+use std::io::{BufRead, Write};
 
+use anyhow::anyhow;
 use serde::{Deserialize, Serialize};
 
 use crate::{InitializedNode, Message, MessageId, NodeId};
 
 /// Reads the init message and responds with init_ok.
-pub(crate) fn initialize_node<N: InitializedNode>(
-    line: &str,
-    mut out: impl Write,
-) -> anyhow::Result<N> {
-    let request: Message<RequestBody> = serde_json::from_str(line)?;
-    let RequestBody::Init(init) = request.body;
+pub(crate) fn initialize_node<N: InitializedNode>() -> anyhow::Result<N> {
+    let first_line = std::io::stdin()
+        .lock()
+        .lines()
+        .next()
+        .ok_or_else(|| anyhow!("did not receive line"))??;
+    let init_message: Message<InitBody> = serde_json::from_str(&first_line)?;
+
+    let InitBody::Init {
+        msg_id,
+        node_id,
+        node_ids,
+    } = init_message.body;
 
     let response = Message {
-        src: init.node_id,
-        dest: request.src,
-        body: ResponseBody::InitOk(InitOkBody {
-            in_reply_to: init.msg_id,
-        }),
+        src: node_id,
+        dest: init_message.src,
+        body: InitOkBody::InitOk {
+            in_reply_to: msg_id,
+        },
     };
-    serde_json::to_writer(&mut out, &response)?;
-    out.write_all(&[b'\n'])?;
 
-    Ok(N::new(init.node_id, init.node_ids))
+    let mut stdout = std::io::stdout().lock();
+    serde_json::to_writer(&mut stdout, &response)?;
+    stdout.write_all(&[b'\n'])?;
+
+    Ok(N::new(node_id, node_ids))
 }
 
 #[derive(PartialEq, Eq, Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
-enum RequestBody {
-    Init(InitBody),
-}
-
-#[derive(PartialEq, Eq, Clone, Debug, Serialize, Deserialize)]
-struct InitBody {
-    msg_id: MessageId,
-    node_id: NodeId,
-    node_ids: Box<[NodeId]>,
+enum InitBody {
+    Init {
+        msg_id: MessageId,
+        node_id: NodeId,
+        node_ids: Box<[NodeId]>,
+    },
 }
 
 #[derive(PartialEq, Eq, Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
-enum ResponseBody {
-    InitOk(InitOkBody),
-}
-
-#[derive(PartialEq, Eq, Clone, Debug, Serialize, Deserialize)]
-struct InitOkBody {
-    in_reply_to: MessageId,
+enum InitOkBody {
+    InitOk { in_reply_to: MessageId },
 }
 
 #[cfg(test)]
@@ -67,14 +69,11 @@ mod tests {
                 "node_ids": ["n1", "n2", "n3"]
             }
         }"#;
-        let message: Message<RequestBody> = serde_json::from_str(json_string).unwrap();
+        let message: Message<InitBody> = serde_json::from_str(json_string).unwrap();
         assert_eq!(message.src.to_string(), "c1".to_owned());
-        let RequestBody::Init(body) = message.body;
+        let InitBody::Init { node_ids, .. } = message.body;
         assert_eq!(
-            body.node_ids
-                .iter()
-                .map(ToString::to_string)
-                .collect::<Vec<_>>(),
+            node_ids.iter().map(ToString::to_string).collect::<Vec<_>>(),
             vec!["n1".to_owned(), "n2".to_owned(), "n3".to_owned()]
         );
     }
@@ -91,7 +90,7 @@ mod tests {
                 "node_ids": ["n1", "n2", "n3"]
             }
         }"#;
-        let message: Result<Message<RequestBody>, _> = serde_json::from_str(json_string);
+        let message: Result<Message<InitBody>, _> = serde_json::from_str(json_string);
         assert!(matches!(message, Result::Err(_)), "{message:?}");
     }
 }

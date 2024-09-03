@@ -32,4 +32,5 @@ maelstrom-broadcast:
       --bin "$CARGO_TARGET_DIR/debug/broadcast" \
       --time-limit 20 \
       --rate 10 \
-      --node-count 1
+      --node-count 5 \
+      --nemesis partition

@@ -7,27 +7,19 @@ use serde::{Deserialize, Serialize};
 struct UniqueId(NodeId, u64);
 
 #[derive(PartialEq, Eq, Clone, Debug, Serialize, Deserialize)]
-struct GenerateBody {
-    msg_id: MessageId,
-}
-
-#[derive(PartialEq, Eq, Clone, Debug, Serialize, Deserialize)]
-struct GenerateOkBody {
-    msg_id: MessageId,
-    in_reply_to: MessageId,
-    id: UniqueId,
-}
-
-#[derive(PartialEq, Eq, Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 enum RequestBody {
-    Generate(GenerateBody),
+    Generate { msg_id: MessageId },
 }
 
 #[derive(PartialEq, Eq, Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 enum ResponseBody {
-    GenerateOk(GenerateOkBody),
+    GenerateOk {
+        msg_id: MessageId,
+        in_reply_to: MessageId,
+        id: UniqueId,
+    },
 }
 
 #[derive(Debug)]
@@ -61,19 +53,20 @@ impl InitializedNode for UniqueIdsNode {
     }
 
     fn handle(&mut self, request: Message<RequestBody>) -> Vec<Message<ResponseBody>> {
-        let RequestBody::Generate(body) = request.body;
-        vec![Message {
+        let RequestBody::Generate { msg_id } = request.body;
+        let response = Message {
             src: self.id,
             dest: request.src,
-            body: ResponseBody::GenerateOk(GenerateOkBody {
+            body: ResponseBody::GenerateOk {
                 msg_id: self
                     .msg_ids
                     .next()
                     .expect("exhausted available message ids"),
-                in_reply_to: body.msg_id,
+                in_reply_to: msg_id,
                 id: self.next_unique_id(),
-            }),
-        }]
+            },
+        };
+        vec![response]
     }
 }
 

@@ -2,28 +2,19 @@ use fly_into_the_maelstrom::*;
 use serde::{Deserialize, Serialize};
 
 #[derive(PartialEq, Eq, Clone, Debug, Serialize, Deserialize)]
-struct EchoBody {
-    msg_id: MessageId,
-    echo: Box<str>,
-}
-
-#[derive(PartialEq, Eq, Clone, Debug, Serialize, Deserialize)]
-struct EchoOkBody {
-    msg_id: MessageId,
-    in_reply_to: MessageId,
-    echo: Box<str>,
-}
-
-#[derive(PartialEq, Eq, Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 enum RequestBody {
-    Echo(EchoBody),
+    Echo { msg_id: MessageId, echo: Box<str> },
 }
 
 #[derive(PartialEq, Eq, Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 enum ResponseBody {
-    EchoOk(EchoOkBody),
+    EchoOk {
+        msg_id: MessageId,
+        in_reply_to: MessageId,
+        echo: Box<str>,
+    },
 }
 
 #[derive(Debug)]
@@ -44,19 +35,20 @@ impl InitializedNode for EchoNode {
     }
 
     fn handle(&mut self, request: Message<RequestBody>) -> Vec<Message<ResponseBody>> {
-        let RequestBody::Echo(body) = request.body;
-        vec![Message {
+        let RequestBody::Echo { msg_id, echo } = request.body;
+        let response = Message {
             src: self.id,
             dest: request.src,
-            body: ResponseBody::EchoOk(EchoOkBody {
+            body: ResponseBody::EchoOk {
                 msg_id: self
                     .msg_ids
                     .next()
                     .expect("exhausted available message ids"),
-                in_reply_to: body.msg_id,
-                echo: body.echo,
-            }),
-        }]
+                in_reply_to: msg_id,
+                echo,
+            },
+        };
+        vec![response]
     }
 }
 

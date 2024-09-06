@@ -31,6 +31,7 @@ maelstrom-broadcast:
     maelstrom test -w broadcast \
       --bin "$CARGO_TARGET_DIR/debug/broadcast" \
       --time-limit 20 \
-      --rate 10 \
-      --node-count 5 \
+      --rate 100 \
+      --node-count 25 \
+      --latency 100 \
       --nemesis partition

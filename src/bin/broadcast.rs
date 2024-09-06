@@ -35,7 +35,7 @@ struct ReadOkBody {
 #[derive(PartialEq, Eq, Clone, Debug, Serialize, Deserialize)]
 struct TopologyBody {
     msg_id: MessageId,
-    topology: HashMap<NodeId, Box<[NodeId]>>,
+    topology: HashMap<NodeId, Vec<NodeId>>,
 }
 
 #[derive(PartialEq, Eq, Clone, Debug, Serialize, Deserialize)]
@@ -61,8 +61,8 @@ struct RetryEntry {
     count: u8,
 }
 
-fn send_after(current: Instant, retry_count: u8) -> Instant {
-    current + Duration::from_millis(100) * (retry_count.max(9) + 1) as u32
+fn send_after(_retry_count: u8) -> Instant {
+    Instant::now() + Duration::from_millis(200)
 }
 
 impl RetryEntry {
@@ -70,14 +70,14 @@ impl RetryEntry {
         let count = 0;
         Self {
             message,
-            send_after: send_after(Instant::now(), count),
+            send_after: send_after(count),
             count,
         }
     }
 
     fn with_backoff(mut self) -> Self {
         self.count += 1;
-        self.send_after = send_after(self.send_after, self.count);
+        self.send_after = send_after(self.count);
         self
     }
 }
@@ -123,10 +123,10 @@ impl RetryQueue {
 #[derive(Debug)]
 struct BroadcastNode {
     id: NodeId,
-    topology: HashMap<NodeId, Box<[NodeId]>>,
+    topology: HashMap<NodeId, Vec<NodeId>>,
+    all_nodes: Vec<NodeId>,
     msg_ids: MessageIdIter,
     messages: Vec<BroadcastMessage>,
-    next_hop: Option<NodeId>,
     retry_queue: RetryQueue,
 }
 
@@ -136,6 +136,18 @@ impl BroadcastNode {
             src: self.id,
             dest,
             body,
+        }
+    }
+
+    fn broadcast_neighbors(&self, src: NodeId) -> Vec<NodeId> {
+        if self.all_nodes.contains(&src) {
+            vec![]
+        } else {
+            self.all_nodes
+                .iter()
+                .filter(|&&n| n != self.id)
+                .copied()
+                .collect()
         }
     }
 
@@ -149,18 +161,19 @@ impl BroadcastNode {
 
         if !self.messages.contains(&body.message) {
             self.messages.push(body.message.clone());
-            if let Some(next_hop) = self.next_hop {
+
+            for neighbor in self.broadcast_neighbors(src) {
                 let msg_id = self
                     .msg_ids
                     .next()
                     .expect("exhausted available message ids");
                 let body = BroadcastBody {
                     msg_id,
-                    message: body.message,
+                    message: body.message.clone(),
                 };
                 self.retry_queue
-                    .insert(RetryEntry::new(self.response(next_hop, body.clone())));
-                responses.push(self.response(next_hop, MessageBody::Broadcast(body)));
+                    .insert(RetryEntry::new(self.response(neighbor, body.clone())));
+                responses.push(self.response(neighbor, MessageBody::Broadcast(body)));
             }
         }
 
@@ -194,19 +207,6 @@ impl BroadcastNode {
     }
 }
 
-fn next_hop(id: NodeId, mut all_nodes: Box<[NodeId]>) -> Option<NodeId> {
-    if all_nodes.len() < 2 {
-        None
-    } else {
-        all_nodes.sort();
-        if let Some(pos) = all_nodes.iter().position(|&x| x == id) {
-            Some(all_nodes.get(pos + 1).copied().unwrap_or(all_nodes[0]))
-        } else {
-            panic!("Node id not found in all_nodes")
-        }
-    }
-}
-
 impl InitializedNode for BroadcastNode {
     type RequestBody = MessageBody;
     type ResponseBody = MessageBody;
@@ -215,9 +215,9 @@ impl InitializedNode for BroadcastNode {
         Self {
             id,
             topology: HashMap::default(),
+            all_nodes: all_nodes.to_vec(),
             msg_ids: MessageIdIter::default(),
             messages: Vec::new(),
-            next_hop: next_hop(id, all_nodes),
             retry_queue: RetryQueue::default(),
         }
     }

@@ -8,9 +8,15 @@ use serde_with::{DeserializeFromStr, SerializeDisplay};
 // is an implementation detail. Because this is a private field, changing this
 // will not affect other parts of the code.
 #[derive(
-    PartialOrd, Ord, PartialEq, Eq, Clone, Copy, Hash, Debug, SerializeDisplay, DeserializeFromStr,
+    PartialOrd, Ord, PartialEq, Eq, Clone, Copy, Hash, SerializeDisplay, DeserializeFromStr,
 )]
 pub struct NodeId([u8; 8]);
+
+impl fmt::Debug for NodeId {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "NodeId(\"{}\")", self)
+    }
+}
 
 impl fmt::Display for NodeId {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {

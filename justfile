@@ -26,12 +26,36 @@ maelstrom-unique-ids:
       --availability total \
       --nemesis partition
 
-maelstrom-broadcast:
+maelstrom-broadcast-a:
     cargo build --bin broadcast && \
     maelstrom test -w broadcast \
       --bin "$CARGO_TARGET_DIR/debug/broadcast" \
+      --node-count 1 \
+      --time-limit 20 \
+      --rate 10
+
+maelstrom-broadcast-b:
+    cargo build --bin broadcast && \
+    maelstrom test -w broadcast \
+      --bin "$CARGO_TARGET_DIR/debug/broadcast" \
+      --node-count 5 \
+      --time-limit 20 \
+      --rate 10
+
+maelstrom-broadcast-c:
+    cargo build --bin broadcast && \
+    maelstrom test -w broadcast \
+      --bin "$CARGO_TARGET_DIR/debug/broadcast" \
+      --node-count 5 \
+      --time-limit 20 \
+      --rate 10 \
+      --nemesis partition
+
+maelstrom-broadcast-d:
+    cargo build --bin broadcast && \
+    maelstrom test -w broadcast \
+      --bin "$CARGO_TARGET_DIR/debug/broadcast" \
+      --node-count 25 \
       --time-limit 20 \
       --rate 100 \
-      --node-count 25 \
-      --latency 100 \
-      --nemesis partition
+      --latency 100

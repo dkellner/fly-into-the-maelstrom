@@ -62,7 +62,7 @@ struct RetryEntry {
 }
 
 fn send_after(_retry_count: u8) -> Instant {
-    Instant::now() + Duration::from_millis(200)
+    Instant::now() + Duration::from_millis(250)
 }
 
 impl RetryEntry {

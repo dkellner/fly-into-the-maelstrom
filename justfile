@@ -58,4 +58,11 @@ maelstrom-broadcast-d:
       --node-count 25 \
       --time-limit 20 \
       --rate 100 \
-      --latency 100
+      --latency 100 && \
+    echo -e "\nRelevant metrics:" && \
+    grep -A 5 -E "(:servers|:stable-latencies)" store/latest/jepsen.log \
+      | grep -E "(:msgs-per-op|:stable-latencies)" && \
+    echo -e "\nObjectives:" && \
+    echo "- messages per operation < 30" && \
+    echo "- median latency < 400ms" && \
+    echo "- maximum latency < 600ms"

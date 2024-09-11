@@ -20,7 +20,7 @@ enum ResponseBody {
 #[derive(Debug)]
 struct EchoNode {
     id: NodeId,
-    msg_ids: MessageIdIter,
+    msg_ids: MessageIdGenerator,
 }
 
 impl InitializedNode for EchoNode {
@@ -30,7 +30,7 @@ impl InitializedNode for EchoNode {
     fn new(id: NodeId, _all_nodes: Box<[NodeId]>) -> Self {
         Self {
             id,
-            msg_ids: MessageIdIter::default(),
+            msg_ids: MessageIdGenerator::default(),
         }
     }
 
@@ -40,10 +40,7 @@ impl InitializedNode for EchoNode {
             src: self.id,
             dest: request.src,
             body: ResponseBody::EchoOk {
-                msg_id: self
-                    .msg_ids
-                    .next()
-                    .expect("exhausted available message ids"),
+                msg_id: self.msg_ids.next_id(),
                 in_reply_to: msg_id,
                 echo,
             },

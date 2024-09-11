@@ -25,7 +25,7 @@ enum ResponseBody {
 #[derive(Debug)]
 struct UniqueIdsNode {
     id: NodeId,
-    msg_ids: MessageIdIter,
+    msg_ids: MessageIdGenerator,
     internal_ids: RangeFrom<u64>,
 }
 
@@ -47,7 +47,7 @@ impl InitializedNode for UniqueIdsNode {
     fn new(id: NodeId, _all_nodes: Box<[NodeId]>) -> Self {
         Self {
             id,
-            msg_ids: MessageIdIter::default(),
+            msg_ids: MessageIdGenerator::default(),
             internal_ids: 0..,
         }
     }
@@ -58,10 +58,7 @@ impl InitializedNode for UniqueIdsNode {
             src: self.id,
             dest: request.src,
             body: ResponseBody::GenerateOk {
-                msg_id: self
-                    .msg_ids
-                    .next()
-                    .expect("exhausted available message ids"),
+                msg_id: self.msg_ids.next_id(),
                 in_reply_to: msg_id,
                 id: self.next_unique_id(),
             },

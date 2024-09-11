@@ -125,7 +125,7 @@ struct BroadcastNode {
     id: NodeId,
     topology: HashMap<NodeId, Vec<NodeId>>,
     all_nodes: Vec<NodeId>,
-    msg_ids: MessageIdIter,
+    msg_ids: MessageIdGenerator,
     messages: Vec<BroadcastMessage>,
     retry_queue: RetryQueue,
 }
@@ -163,10 +163,7 @@ impl BroadcastNode {
             self.messages.push(body.message.clone());
 
             for neighbor in self.broadcast_neighbors(src) {
-                let msg_id = self
-                    .msg_ids
-                    .next()
-                    .expect("exhausted available message ids");
+                let msg_id = self.msg_ids.next_id();
                 let body = BroadcastBody {
                     msg_id,
                     message: body.message.clone(),
@@ -216,7 +213,7 @@ impl InitializedNode for BroadcastNode {
             id,
             topology: HashMap::default(),
             all_nodes: all_nodes.to_vec(),
-            msg_ids: MessageIdIter::default(),
+            msg_ids: MessageIdGenerator::default(),
             messages: Vec::new(),
             retry_queue: RetryQueue::default(),
         }

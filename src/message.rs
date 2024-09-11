@@ -28,19 +28,21 @@ impl<B> Message<B> {
 pub struct MessageId(u64);
 
 #[derive(Debug)]
-pub struct MessageIdIter {
+pub struct MessageIdGenerator {
     iter: RangeFrom<u64>,
 }
 
-impl Default for MessageIdIter {
+impl Default for MessageIdGenerator {
     fn default() -> Self {
         Self { iter: 0.. }
     }
 }
 
-impl Iterator for MessageIdIter {
-    type Item = MessageId;
-    fn next(&mut self) -> Option<Self::Item> {
-        self.iter.next().map(MessageId)
+impl MessageIdGenerator {
+    pub fn next_id(&mut self) -> MessageId {
+        self.iter
+            .next()
+            .map(MessageId)
+            .expect("exhausted available message ids")
     }
 }

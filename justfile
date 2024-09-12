@@ -64,8 +64,25 @@ maelstrom-broadcast-d:
       --latency 100 && \
     echo -e "\nRelevant metrics:" && \
     grep -A 5 -E "(:servers|:stable-latencies)" store/latest/jepsen.log \
-      | grep -E "(:msgs-per-op|:stable-latencies)" && \
+      | grep -A 5 -E "(:msgs-per-op|:stable-latencies)" && \
     echo -e "\nObjectives:" && \
     echo "- messages per operation < 30" && \
     echo "- median latency < 400ms" && \
     echo "- maximum latency < 600ms"
+
+maelstrom-broadcast-e:
+    cargo build --bin broadcast && \
+    maelstrom test -w broadcast \
+      --bin "$CARGO_TARGET_DIR/debug/broadcast" \
+      --node-count 25 \
+      --time-limit 20 \
+      --rate 100 \
+      --latency 100 \
+      --nemesis partition && \
+    echo -e "\nRelevant metrics:" && \
+    grep -A 5 -E "(:servers|:stable-latencies)" store/latest/jepsen.log \
+      | grep -A 5 -E "(:msgs-per-op|:stable-latencies)" && \
+    echo -e "\nObjectives:" && \
+    echo "- messages per operation < 20" && \
+    echo "- median latency < 1s" && \
+    echo "- maximum latency < 2s"

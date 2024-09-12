@@ -8,12 +8,41 @@ use fly_into_the_maelstrom::*;
 use serde::{Deserialize, Serialize};
 
 #[derive(PartialEq, Eq, Clone, Debug, Serialize, Deserialize)]
-struct BroadcastMessage(u64);
+#[serde(untagged)]
+enum BroadcastValue {
+    Single(u64),
+    Batch(Vec<u64>),
+}
+
+type Value = u64;
+
+impl BroadcastValue {
+    fn values(&self) -> Vec<Value> {
+        match self {
+            BroadcastValue::Single(v) => vec![*v],
+            BroadcastValue::Batch(vs) => vs.clone(),
+        }
+    }
+
+    fn append(&mut self, other: &Self) {
+        match self {
+            BroadcastValue::Single(_) => unreachable!(),
+            BroadcastValue::Batch(values) => {
+                for v in other.values() {
+                    if !values.contains(&v) {
+                        values.push(v);
+                    }
+                }
+            }
+        }
+    }
+}
 
 #[derive(PartialEq, Eq, Clone, Debug, Serialize, Deserialize)]
 struct BroadcastBody {
     msg_id: MessageId,
-    message: BroadcastMessage,
+    #[serde(rename = "message")]
+    value: BroadcastValue,
 }
 
 #[derive(PartialEq, Eq, Clone, Debug, Serialize, Deserialize)]
@@ -29,7 +58,8 @@ struct ReadBody {
 #[derive(PartialEq, Eq, Clone, Debug, Serialize, Deserialize)]
 struct ReadOkBody {
     in_reply_to: MessageId,
-    messages: Box<[BroadcastMessage]>,
+    #[serde(rename = "messages")]
+    values: Box<[Value]>,
 }
 
 #[derive(PartialEq, Eq, Clone, Debug, Serialize, Deserialize)]
@@ -121,12 +151,67 @@ impl RetryQueue {
 }
 
 #[derive(Debug)]
+struct OutboxEntry {
+    message: Message<BroadcastBody>,
+    send_after: Instant,
+}
+
+impl OutboxEntry {
+    fn new(message: Message<BroadcastBody>) -> Self {
+        Self {
+            message,
+            send_after: Instant::now() + Duration::from_millis(1000),
+        }
+    }
+}
+
+#[derive(Default, Debug)]
+struct Outbox {
+    inner: VecDeque<OutboxEntry>,
+}
+
+impl Outbox {
+    fn front(&self) -> Option<&OutboxEntry> {
+        self.inner.front()
+    }
+
+    fn insert(&mut self, entry: OutboxEntry) {
+        if let Some(existing_entry) = self
+            .inner
+            .iter_mut()
+            .find(|e| e.message.dest == entry.message.dest)
+        {
+            existing_entry
+                .message
+                .body
+                .value
+                .append(&entry.message.body.value);
+        } else {
+            self.inner.push_back(entry);
+        }
+    }
+
+    fn pop_entries_need_sending(&mut self) -> impl Iterator<Item = OutboxEntry> + '_ {
+        if let Some(last_idx) = self
+            .inner
+            .iter()
+            .rposition(|entry| entry.send_after <= Instant::now())
+        {
+            self.inner.drain(..=last_idx)
+        } else {
+            self.inner.drain(..0)
+        }
+    }
+}
+
+#[derive(Debug)]
 struct BroadcastNode {
     id: NodeId,
     topology: HashMap<NodeId, Vec<NodeId>>,
     all_nodes: Vec<NodeId>,
     msg_ids: MessageIdGenerator,
-    messages: Vec<BroadcastMessage>,
+    values: Vec<Value>,
+    outbox: Outbox,
     retry_queue: RetryQueue,
 }
 
@@ -151,30 +236,37 @@ impl BroadcastNode {
         }
     }
 
+    fn append_values(&mut self, message: BroadcastValue) -> Vec<Value> {
+        let mut result = vec![];
+        for v in message.values() {
+            if !self.values.contains(&v) {
+                result.push(v);
+                self.values.push(v);
+            }
+        }
+        result
+    }
+
     fn handle_broadcast(&mut self, src: NodeId, body: BroadcastBody) -> Vec<Message<MessageBody>> {
-        let mut responses = vec![self.response(
-            src,
-            MessageBody::BroadcastOk(BroadcastOkBody {
-                in_reply_to: body.msg_id,
-            }),
-        )];
-
-        if !self.messages.contains(&body.message) {
-            self.messages.push(body.message.clone());
-
+        let new_messages = self.append_values(body.value);
+        if !new_messages.is_empty() {
             for neighbor in self.broadcast_neighbors(src) {
                 let msg_id = self.msg_ids.next_id();
                 let body = BroadcastBody {
                     msg_id,
-                    message: body.message.clone(),
+                    value: BroadcastValue::Batch(new_messages.clone()),
                 };
-                self.retry_queue
-                    .insert(RetryEntry::new(self.response(neighbor, body.clone())));
-                responses.push(self.response(neighbor, MessageBody::Broadcast(body)));
+                self.outbox
+                    .insert(OutboxEntry::new(self.response(neighbor, body)));
             }
         }
 
-        responses
+        vec![self.response(
+            src,
+            MessageBody::BroadcastOk(BroadcastOkBody {
+                in_reply_to: body.msg_id,
+            }),
+        )]
     }
 
     fn handle_read(&mut self, src: NodeId, body: ReadBody) -> Vec<Message<MessageBody>> {
@@ -182,7 +274,7 @@ impl BroadcastNode {
             src,
             MessageBody::ReadOk(ReadOkBody {
                 in_reply_to: body.msg_id,
-                messages: self.messages.clone().into_iter().collect(),
+                values: self.values.clone().into_iter().collect(),
             }),
         )]
     }
@@ -214,7 +306,8 @@ impl InitializedNode for BroadcastNode {
             topology: HashMap::default(),
             all_nodes: all_nodes.to_vec(),
             msg_ids: MessageIdGenerator::default(),
-            messages: Vec::new(),
+            values: Vec::new(),
+            outbox: Outbox::default(),
             retry_queue: RetryQueue::default(),
         }
     }
@@ -231,16 +324,30 @@ impl InitializedNode for BroadcastNode {
     }
 
     fn next_wake_up(&self) -> Option<Instant> {
-        self.retry_queue.front().map(|entry| entry.send_after)
+        let t0 = self.outbox.front().map(|entry| entry.send_after);
+        let t1 = self.retry_queue.front().map(|entry| entry.send_after);
+        match (t0, t1) {
+            (None, None) => None,
+            (None, Some(a)) | (Some(a), None) => Some(a),
+            (Some(a), Some(b)) => Some(a.min(b)),
+        }
     }
 
     fn wake_up(&mut self) -> Vec<Message<MessageBody>> {
-        let entries: Vec<_> = self.retry_queue.pop_entries_needing_retry().collect();
         let mut messages = vec![];
+
+        let entries: Vec<_> = self.outbox.pop_entries_need_sending().collect();
+        for entry in entries {
+            messages.push(entry.message.clone().mapped());
+            self.retry_queue.insert(RetryEntry::new(entry.message));
+        }
+
+        let entries: Vec<_> = self.retry_queue.pop_entries_needing_retry().collect();
         for entry in entries {
             messages.push(entry.message.clone().mapped());
             self.retry_queue.insert(entry.with_backoff());
         }
+
         messages
     }
 }

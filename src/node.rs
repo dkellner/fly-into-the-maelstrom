@@ -1,5 +1,6 @@
 use std::{
     io::{BufRead, Write},
+    panic, process,
     sync::mpsc,
     thread::{sleep, JoinHandle},
     time::{Duration, Instant},
@@ -32,6 +33,12 @@ pub trait InitializedNode {
 }
 
 pub fn run_node<N: InitializedNode>() -> anyhow::Result<()> {
+    let orig_hook = panic::take_hook();
+    panic::set_hook(Box::new(move |panic_info| {
+        orig_hook(panic_info);
+        process::exit(1);
+    }));
+
     let mut node: N = initialize_node()?;
 
     let (node_tx, node_rx) = mpsc::channel::<NodeInput<N::RequestBody>>();
@@ -54,35 +61,41 @@ pub fn run_node<N: InitializedNode>() -> anyhow::Result<()> {
     }
 }
 
-fn read_stdin<N: InitializedNode>(
-    node_tx: mpsc::Sender<NodeInput<N::RequestBody>>,
-) -> anyhow::Result<()> {
+fn read_stdin<N: InitializedNode>(node_tx: mpsc::Sender<NodeInput<N::RequestBody>>) {
     let lines = std::io::stdin().lock().lines();
     for line in lines {
-        let request: Message<N::RequestBody> = serde_json::from_str(&line?)?;
-        node_tx.send(NodeInput::Message(request))?;
+        let line = line.expect("could not read line");
+        let request: Message<N::RequestBody> =
+            serde_json::from_str(&line).expect("could not parse line");
+        node_tx
+            .send(NodeInput::Message(request))
+            .expect("sending to channel failed");
+        eprintln!("< {line}");
     }
-    Ok(())
 }
 
-fn write_stdout<N: InitializedNode>(
-    rx: mpsc::Receiver<Message<N::ResponseBody>>,
-) -> anyhow::Result<()> {
+fn write_stdout<N: InitializedNode>(rx: mpsc::Receiver<Message<N::ResponseBody>>) {
     let mut stdout = std::io::stdout().lock();
     loop {
-        let message = rx.recv()?;
-        serde_json::to_writer(&mut stdout, &message)?;
-        stdout.write_all(&[b'\n'])?;
+        let message = rx.recv().expect("reading from channel failed");
+        serde_json::to_writer(&mut stdout, &message).expect("writing to stdout failed");
+        stdout
+            .write_all(&[b'\n'])
+            .expect("writing to stdout failed");
+        eprintln!(
+            "> {}",
+            serde_json::to_string(&message).expect("serializing message failed")
+        );
     }
 }
 
 fn handle_wake_up<N: InitializedNode>(
     wake_up_rx: mpsc::Receiver<Option<Instant>>,
     node_tx: mpsc::Sender<NodeInput<N::RequestBody>>,
-) -> anyhow::Result<()> {
+) {
     let mut waker: Option<JoinHandle<_>> = None;
     loop {
-        let next_wake_up = wake_up_rx.recv()?;
+        let next_wake_up = wake_up_rx.recv().expect("reading from channel failed");
         waker.take(); // XXX: kill thread instead of detaching it
         if let Some(instant) = next_wake_up {
             let sleep_duration = instant - Instant::now();
@@ -93,7 +106,9 @@ fn handle_wake_up<N: InitializedNode>(
                     tx.send(NodeInput::WakeUp)
                 }));
             } else {
-                node_tx.send(NodeInput::WakeUp)?;
+                node_tx
+                    .send(NodeInput::WakeUp)
+                    .expect("sending to channel failed");
             }
         }
     }

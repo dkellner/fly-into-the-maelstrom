@@ -5,6 +5,9 @@ check:
     cargo clippy
     cargo fmt --check --all
 
+fmt:
+    cargo fmt --all
+
 test:
     just check
     cargo test

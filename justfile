@@ -72,13 +72,12 @@ maelstrom-broadcast-d:
 
 maelstrom-broadcast-e:
     cargo build --bin broadcast && \
-    maelstrom test -w broadcast \
+    BROADCAST_DELAY_MS=1000 maelstrom test -w broadcast \
       --bin "$CARGO_TARGET_DIR/debug/broadcast" \
       --node-count 25 \
       --time-limit 20 \
       --rate 100 \
-      --latency 100 \
-      --nemesis partition && \
+      --latency 100 && \
     echo -e "\nRelevant metrics:" && \
     grep -A 5 -E "(:servers|:stable-latencies)" store/latest/jepsen.log \
       | grep -A 5 -E "(:msgs-per-op|:stable-latencies)" && \

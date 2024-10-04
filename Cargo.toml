@@ -21,3 +21,7 @@ path = "src/bin/unique_ids.rs"
 [[bin]]
 name = "broadcast"
 path = "src/bin/broadcast.rs"
+
+[[bin]]
+name = "g-counter"
+path = "src/bin/g_counter.rs"

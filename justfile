@@ -85,3 +85,12 @@ maelstrom-broadcast-e:
     echo "- messages per operation < 20" && \
     echo "- median latency < 1s" && \
     echo "- maximum latency < 2s"
+
+maelstrom-g-counter:
+    cargo build --bin g-counter && \
+    BROADCAST_DELAY_MS=1000 maelstrom test -w g-counter \
+      --bin "$CARGO_TARGET_DIR/debug/g-counter" \
+      --node-count 3 \
+      --rate 100 \
+      --time-limit 20 \
+      --nemesis partition

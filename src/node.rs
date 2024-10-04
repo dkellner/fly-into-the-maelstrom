@@ -41,12 +41,13 @@ pub fn run_node<N: InitializedNode>() -> anyhow::Result<()> {
 
     let mut node: N = initialize_node()?;
 
+    let start_time = Instant::now();
     let (node_tx, node_rx) = mpsc::channel::<NodeInput<N::RequestBody>>();
     let (stdout_tx, stdout_rx) = mpsc::channel::<Message<N::ResponseBody>>();
     let (wake_up_tx, wake_up_rx) = mpsc::channel::<Option<Instant>>();
     let node_tx_2 = node_tx.clone();
-    std::thread::spawn(|| read_stdin::<N>(node_tx));
-    std::thread::spawn(|| write_stdout::<N>(stdout_rx));
+    std::thread::spawn(move || read_stdin::<N>(node_tx, start_time));
+    std::thread::spawn(move || write_stdout::<N>(stdout_rx, start_time));
     std::thread::spawn(|| handle_wake_up::<N>(wake_up_rx, node_tx_2));
 
     loop {
@@ -61,7 +62,10 @@ pub fn run_node<N: InitializedNode>() -> anyhow::Result<()> {
     }
 }
 
-fn read_stdin<N: InitializedNode>(node_tx: mpsc::Sender<NodeInput<N::RequestBody>>) {
+fn read_stdin<N: InitializedNode>(
+    node_tx: mpsc::Sender<NodeInput<N::RequestBody>>,
+    start_time: Instant,
+) {
     let lines = std::io::stdin().lock().lines();
     for line in lines {
         let line = line.expect("could not read line");
@@ -70,11 +74,14 @@ fn read_stdin<N: InitializedNode>(node_tx: mpsc::Sender<NodeInput<N::RequestBody
         node_tx
             .send(NodeInput::Message(request))
             .expect("sending to channel failed");
-        eprintln!("< {line}");
+        log(&format!("< {line}"), start_time);
     }
 }
 
-fn write_stdout<N: InitializedNode>(rx: mpsc::Receiver<Message<N::ResponseBody>>) {
+fn write_stdout<N: InitializedNode>(
+    rx: mpsc::Receiver<Message<N::ResponseBody>>,
+    start_time: Instant,
+) {
     let mut stdout = std::io::stdout().lock();
     loop {
         let message = rx.recv().expect("reading from channel failed");
@@ -82,9 +89,12 @@ fn write_stdout<N: InitializedNode>(rx: mpsc::Receiver<Message<N::ResponseBody>>
         stdout
             .write_all(&[b'\n'])
             .expect("writing to stdout failed");
-        eprintln!(
-            "> {}",
-            serde_json::to_string(&message).expect("serializing message failed")
+        log(
+            &format!(
+                "> {}",
+                serde_json::to_string(&message).expect("serializing message failed")
+            ),
+            start_time,
         );
     }
 }
@@ -112,4 +122,9 @@ fn handle_wake_up<N: InitializedNode>(
             }
         }
     }
+}
+
+fn log(message: &str, start_time: Instant) {
+    let elapsed = Instant::now() - start_time;
+    eprintln!("[{:.1}] {}", elapsed.as_millis() as f32 / 1000.0, message);
 }

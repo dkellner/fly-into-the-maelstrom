@@ -1,8 +1,9 @@
-use core::fmt;
-use std::str::FromStr;
+use std::{fmt, str::FromStr};
 
-use anyhow::bail;
+use derive_more::derive::Display;
 use serde_with::{DeserializeFromStr, SerializeDisplay};
+
+const NODE_ID_LENGTH: usize = 8;
 
 // We want `NodeId` to be `Copy`. I opted for storing 8 ASCII bytes, but this
 // is an implementation detail. Because this is a private field, changing this
@@ -10,7 +11,41 @@ use serde_with::{DeserializeFromStr, SerializeDisplay};
 #[derive(
     PartialOrd, Ord, PartialEq, Eq, Clone, Copy, Hash, SerializeDisplay, DeserializeFromStr,
 )]
-pub struct NodeId([u8; 8]);
+pub struct NodeId([u8; NODE_ID_LENGTH]);
+
+#[derive(PartialEq, Eq, Clone, Copy, Debug, Display)]
+pub enum ParseNodeIdError {
+    #[display("node id is longer than 8 characters")]
+    TooLong,
+    #[display("node id contains invalid byte: {_0:x}")]
+    InvalidByte(u8),
+}
+
+impl NodeId {
+    /// Parse a string `s` to return a [NodeId].
+    ///
+    /// This is a const version of [FromStr::from_str].
+    pub const fn from_str(s: &str) -> Result<Self, ParseNodeIdError> {
+        let bytes = s.as_bytes();
+        if bytes.len() > NODE_ID_LENGTH {
+            return Err(ParseNodeIdError::TooLong);
+        }
+
+        let mut result = [0; NODE_ID_LENGTH];
+        let mut idx = 0;
+        while idx < bytes.len() {
+            let b = bytes[idx];
+            if b.is_ascii_alphabetic() || b.is_ascii_digit() || b.is_ascii_punctuation() {
+                result[idx] = b;
+            } else {
+                return Err(ParseNodeIdError::InvalidByte(b));
+            }
+            idx += 1;
+        }
+
+        Ok(Self(result))
+    }
+}
 
 impl fmt::Debug for NodeId {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
@@ -28,23 +63,9 @@ impl fmt::Display for NodeId {
 }
 
 impl FromStr for NodeId {
-    type Err = anyhow::Error;
+    type Err = ParseNodeIdError;
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let mut result = [0; 8];
-        for (idx, c) in s.chars().enumerate() {
-            if !c.is_ascii() {
-                bail!("node id contains non-ascii chars");
-            }
-            let ascii = c.try_into()?;
-            if ascii == 0 {
-                bail!("encountered null byte");
-            }
-            if idx >= result.len() {
-                bail!("node id is longer than 8 chars");
-            }
-            result[idx] = ascii;
-        }
-        Ok(Self(result))
+        NodeId::from_str(s)
     }
 }
 

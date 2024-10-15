@@ -1,4 +1,4 @@
-use std::{collections::VecDeque, str::FromStr};
+use std::collections::VecDeque;
 
 use derive_more::derive::From;
 use fly_into_the_maelstrom::*;
@@ -8,9 +8,11 @@ type Value = u64;
 
 const COUNTER_KEY: &str = "global-counter";
 
-fn seq_kv_node_id() -> NodeId {
-    NodeId::from_str("seq-kv").unwrap()
-}
+// XXX: This really needs const Option::unwrap().
+const SEQ_KV_NODE_ID: NodeId = match NodeId::from_str("seq-kv") {
+    Ok(node_id) => node_id,
+    Err(_) => unreachable!(),
+};
 
 #[derive(PartialEq, Eq, Clone, Debug, Serialize, Deserialize)]
 struct AddBody {
@@ -145,7 +147,7 @@ impl GCounterNode {
     fn send_kv_read(&mut self) -> MessageId {
         let msg_id = self.msg_ids.next_id();
         self.send(
-            seq_kv_node_id(),
+            SEQ_KV_NODE_ID,
             ResponseBody::KVRead {
                 msg_id,
                 key: COUNTER_KEY.to_owned(),
@@ -256,7 +258,7 @@ impl DefaultState {
     fn send_kv_cas(&self, from: Value, to: Value, node: &mut GCounterNode) -> MessageId {
         let msg_id = node.msg_ids.next_id();
         node.send(
-            seq_kv_node_id(),
+            SEQ_KV_NODE_ID,
             ResponseBody::KVCompareAndSwap {
                 msg_id,
                 key: COUNTER_KEY.to_owned(),

@@ -1,72 +1,60 @@
 use std::ops::RangeFrom;
 
+use anyhow::{anyhow, Result};
 use fly_into_the_maelstrom::*;
 use serde::{Deserialize, Serialize};
 
-#[derive(PartialEq, Eq, Clone, Copy, Debug, Serialize, Deserialize)]
+#[derive(PartialEq, Eq, Clone, Copy, Debug, Serialize)]
 struct UniqueId(NodeId, u64);
 
-#[derive(PartialEq, Eq, Clone, Debug, Serialize, Deserialize)]
+#[derive(PartialEq, Eq, Clone, Debug, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
-enum RequestBody {
-    Generate { msg_id: MessageId },
+enum RequestPayload {
+    Generate,
 }
 
-#[derive(PartialEq, Eq, Clone, Debug, Serialize, Deserialize)]
+#[derive(PartialEq, Eq, Clone, Debug, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
-enum ResponseBody {
-    GenerateOk {
-        msg_id: MessageId,
-        in_reply_to: MessageId,
-        id: UniqueId,
-    },
+enum ResponsePayload {
+    GenerateOk { id: UniqueId },
 }
 
 #[derive(Debug)]
 struct UniqueIdsNode {
     id: NodeId,
-    msg_ids: MessageIdGenerator,
+    tx: MessageTransmitter<ResponsePayload>,
     internal_ids: RangeFrom<u64>,
 }
 
 impl UniqueIdsNode {
-    fn next_unique_id(&mut self) -> UniqueId {
-        UniqueId(
-            self.id,
-            self.internal_ids
-                .next()
-                .expect("exhausted available internal ids"),
-        )
+    fn next_unique_id(&mut self) -> Result<UniqueId> {
+        let internal_id = self
+            .internal_ids
+            .next()
+            .ok_or(anyhow!("exhausted available internal ids"))?;
+        Ok(UniqueId(self.id, internal_id))
     }
 }
 
-impl InitializedNode for UniqueIdsNode {
-    type RequestBody = RequestBody;
-    type ResponseBody = ResponseBody;
-
-    fn new(id: NodeId, _all_nodes: Box<[NodeId]>) -> Self {
-        Self {
-            id,
-            msg_ids: MessageIdGenerator::default(),
-            internal_ids: 0..,
-        }
+impl NodeState for UniqueIdsNode {
+    fn handle(mut self: Box<Self>, request: &str) -> Result<Box<dyn NodeState>> {
+        let Message::<RequestPayload> { header, .. } = deserialize_message(request)?;
+        let id = self.next_unique_id()?;
+        self.tx.reply(&header, ResponsePayload::GenerateOk { id });
+        Ok(self)
     }
 
-    fn handle(&mut self, request: Message<RequestBody>) -> Vec<Message<ResponseBody>> {
-        let RequestBody::Generate { msg_id } = request.body;
-        let response = Message {
-            src: self.id,
-            dest: request.src,
-            body: ResponseBody::GenerateOk {
-                msg_id: self.msg_ids.next_id(),
-                in_reply_to: msg_id,
-                id: self.next_unique_id(),
-            },
-        };
-        vec![response]
+    fn wake_up(self: Box<Self>) -> Result<Box<dyn NodeState>> {
+        Ok(self)
     }
 }
 
 fn main() -> anyhow::Result<()> {
-    run_node::<UniqueIdsNode>()
+    run_node(Box::new(|init, tx| {
+        Box::new(UniqueIdsNode {
+            id: init.node_id,
+            tx: tx.into(),
+            internal_ids: 0..,
+        })
+    }))
 }

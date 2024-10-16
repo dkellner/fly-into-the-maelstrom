@@ -1,54 +1,66 @@
-use std::io::{BufRead, Write};
+use std::sync::mpsc;
 
-use anyhow::anyhow;
+use anyhow::Result;
 use serde::{Deserialize, Serialize};
 
-use crate::{InitializedNode, Message, MessageId, NodeId};
+use crate::{deserialize_message, Message, MessageTransmitter, NodeId, NodeState};
 
-/// Reads the init message and responds with init_ok.
-pub(crate) fn initialize_node<N: InitializedNode>() -> anyhow::Result<N> {
-    let first_line = std::io::stdin()
-        .lock()
-        .lines()
-        .next()
-        .ok_or_else(|| anyhow!("did not receive line"))??;
-    let init_message: Message<InitBody> = serde_json::from_str(&first_line)?;
+/// Returns the state after the node was successfully initialized.
+pub type AfterInitTransition =
+    Box<dyn Fn(InitPayload, MessageTransmitter<()>) -> Box<dyn NodeState>>;
 
-    let InitBody::Init {
-        msg_id,
-        node_id,
-        node_ids,
-    } = init_message.body;
-
-    let response = Message {
-        src: node_id,
-        dest: init_message.src,
-        body: InitOkBody::InitOk {
-            in_reply_to: msg_id,
-        },
-    };
-
-    let mut stdout = std::io::stdout().lock();
-    serde_json::to_writer(&mut stdout, &response)?;
-    stdout.write_all(&[b'\n'])?;
-
-    Ok(N::new(node_id, node_ids))
+pub(crate) struct InitializingNode {
+    stdout_tx: mpsc::SyncSender<String>,
+    after_init: AfterInitTransition,
 }
 
-#[derive(PartialEq, Eq, Clone, Debug, Serialize, Deserialize)]
-#[serde(tag = "type", rename_all = "snake_case")]
-enum InitBody {
-    Init {
-        msg_id: MessageId,
-        node_id: NodeId,
-        node_ids: Box<[NodeId]>,
-    },
+impl InitializingNode {
+    pub(crate) fn new(
+        stdout_tx: mpsc::SyncSender<String>,
+        after_init: AfterInitTransition,
+    ) -> Self {
+        Self {
+            stdout_tx,
+            after_init,
+        }
+    }
 }
 
-#[derive(PartialEq, Eq, Clone, Debug, Serialize, Deserialize)]
+impl NodeState for InitializingNode {
+    fn handle(self: Box<Self>, request: &str) -> Result<Box<dyn NodeState>> {
+        let init_message: Message<RequestPayload> = deserialize_message(request)?;
+
+        let Message { header, payload } = init_message;
+        let RequestPayload::Init(data) = payload;
+
+        let mut tx = MessageTransmitter::new(data.node_id, self.stdout_tx);
+        tx.reply(&header, ResponsePayload::InitOk);
+
+        Ok((self.after_init)(data, tx.into()))
+    }
+
+    fn wake_up(self: Box<Self>) -> Result<Box<dyn NodeState>> {
+        Ok(self)
+    }
+}
+
+/// The payload a node received with the `init` message.
+#[derive(PartialEq, Eq, Clone, Debug, Deserialize)]
+pub struct InitPayload {
+    pub node_id: NodeId,
+    pub node_ids: Box<[NodeId]>,
+}
+
+#[derive(PartialEq, Eq, Clone, Debug, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
-enum InitOkBody {
-    InitOk { in_reply_to: MessageId },
+enum RequestPayload {
+    Init(InitPayload),
+}
+
+#[derive(PartialEq, Eq, Clone, Debug, Serialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+enum ResponsePayload {
+    InitOk,
 }
 
 #[cfg(test)]
@@ -69,9 +81,9 @@ mod tests {
                 "node_ids": ["n1", "n2", "n3"]
             }
         }"#;
-        let message: Message<InitBody> = serde_json::from_str(json_string).unwrap();
-        assert_eq!(message.src.to_string(), "c1".to_owned());
-        let InitBody::Init { node_ids, .. } = message.body;
+        let message: Message<RequestPayload> = serde_json::from_str(json_string).unwrap();
+        assert_eq!(message.header.src.to_string(), "c1".to_owned());
+        let RequestPayload::Init(InitPayload { node_ids, .. }) = message.payload;
         assert_eq!(
             node_ids.iter().map(ToString::to_string).collect::<Vec<_>>(),
             vec!["n1".to_owned(), "n2".to_owned(), "n3".to_owned()]
@@ -90,7 +102,7 @@ mod tests {
                 "node_ids": ["n1", "n2", "n3"]
             }
         }"#;
-        let message: Result<Message<InitBody>, _> = serde_json::from_str(json_string);
+        let message: Result<Message<RequestPayload>, _> = serde_json::from_str(json_string);
         assert!(matches!(message, Result::Err(_)), "{message:?}");
     }
 }

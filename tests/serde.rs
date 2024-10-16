@@ -2,15 +2,14 @@ use fly_into_the_maelstrom::*;
 use serde::{Deserialize, Serialize};
 
 #[derive(PartialEq, Eq, Clone, Debug, Serialize, Deserialize)]
-struct EchoBody {
-    msg_id: MessageId,
+struct EchoPayload {
     echo: Box<str>,
 }
 
 #[derive(PartialEq, Eq, Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
-enum MessageBody {
-    Echo(EchoBody),
+enum MessagePayload {
+    Echo(EchoPayload),
 }
 
 #[test]
@@ -24,7 +23,7 @@ fn deserialize_custom_body() {
                 "echo": "Please echo 35"
             }
         }"#;
-    let message: Message<MessageBody> = serde_json::from_str(json_string).unwrap();
-    let MessageBody::Echo(echo) = message.body;
+    let message: Message<MessagePayload> = serde_json::from_str(json_string).unwrap();
+    let MessagePayload::Echo(echo) = message.payload;
     assert_eq!(echo.echo.as_ref(), "Please echo 35");
 }

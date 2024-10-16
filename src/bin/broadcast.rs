@@ -5,6 +5,7 @@ use std::{
     time::{Duration, Instant},
 };
 
+use anyhow::Result;
 use derive_more::derive::From;
 use fly_into_the_maelstrom::*;
 use serde::{Deserialize, Serialize};
@@ -18,16 +19,15 @@ type Value = u64;
 
 #[serde_as]
 #[derive(PartialEq, Eq, Clone, Debug, Serialize, Deserialize)]
-struct BroadcastBody {
-    msg_id: MessageId,
+struct BroadcastPayload {
     #[serde(rename = "message")]
     #[serde_as(as = "OneOrMany<_>")]
     values: Vec<Value>,
 }
 
 // We use `+=` to merge multiple broadcast messages into one for batching.
-impl AddAssign<BroadcastBody> for BroadcastBody {
-    fn add_assign(&mut self, rhs: BroadcastBody) {
+impl AddAssign<BroadcastPayload> for BroadcastPayload {
+    fn add_assign(&mut self, rhs: BroadcastPayload) {
         for v in rhs.values {
             if !self.values.contains(&v) {
                 self.values.push(v);
@@ -37,157 +37,116 @@ impl AddAssign<BroadcastBody> for BroadcastBody {
 }
 
 #[derive(PartialEq, Eq, Clone, Debug, Serialize, Deserialize)]
-struct BroadcastOkBody {
-    in_reply_to: MessageId,
-}
-
-#[derive(PartialEq, Eq, Clone, Debug, Serialize, Deserialize)]
-struct ReadBody {
-    msg_id: MessageId,
-}
-
-#[derive(PartialEq, Eq, Clone, Debug, Serialize, Deserialize)]
-struct ReadOkBody {
-    in_reply_to: MessageId,
+struct ReadOkPayload {
     #[serde(rename = "messages")]
     values: Box<[Value]>,
 }
 
 #[derive(PartialEq, Eq, Clone, Debug, Serialize, Deserialize)]
-struct TopologyBody {
-    msg_id: MessageId,
+struct TopologyPayload {
     topology: HashMap<NodeId, Vec<NodeId>>,
-}
-
-#[derive(PartialEq, Eq, Clone, Debug, Serialize, Deserialize)]
-struct TopologyOkBody {
-    in_reply_to: MessageId,
 }
 
 #[derive(PartialEq, Eq, Clone, Debug, Serialize, Deserialize, From)]
 #[serde(tag = "type", rename_all = "snake_case")]
-enum MessageBody {
-    Broadcast(BroadcastBody),
-    BroadcastOk(BroadcastOkBody),
-    Read(ReadBody),
-    ReadOk(ReadOkBody),
-    Topology(TopologyBody),
-    TopologyOk(TopologyOkBody),
+enum Payload {
+    Broadcast(BroadcastPayload),
+    BroadcastOk,
+    Read,
+    ReadOk(ReadOkPayload),
+    Topology(TopologyPayload),
+    TopologyOk,
 }
 
 #[derive(Debug)]
 struct BroadcastNode {
     id: NodeId,
-    all_nodes: Vec<NodeId>,
-    msg_ids: MessageIdGenerator,
+    other_nodes: Box<[NodeId]>,
+    tx: MessageTransmitter<Payload>,
     values: BTreeSet<Value>,
-    outbox: Outbox<BroadcastBody>,
-    retry_queue: RetryQueue<BroadcastBody>,
+    outbox: Outbox<BroadcastPayload>,
+    retry_queue: RetryQueue<BroadcastPayload>,
 }
 
 impl BroadcastNode {
-    fn response<B>(&self, dest: NodeId, body: B) -> Message<B> {
-        Message {
-            src: self.id,
-            dest,
-            body,
-        }
-    }
-
-    fn broadcast_neighbors(&self, src: NodeId) -> Vec<NodeId> {
-        if self.all_nodes.contains(&src) {
-            vec![]
-        } else {
-            self.all_nodes
-                .iter()
-                .filter(|&&n| n != self.id)
-                .copied()
-                .collect()
-        }
-    }
-
-    fn handle_broadcast(&mut self, src: NodeId, body: BroadcastBody) -> Vec<Message<MessageBody>> {
-        let values: BTreeSet<Value> = body.values.into_iter().collect();
-        let new_values: BTreeSet<Value> = values.difference(&self.values).copied().collect();
-        self.values.extend(&new_values);
-
-        if !new_values.is_empty() {
-            for neighbor in self.broadcast_neighbors(src) {
-                let msg_id = self.msg_ids.next_id();
-                self.outbox.merge_or_push(self.response(
-                    neighbor,
-                    BroadcastBody {
-                        msg_id,
-                        values: new_values.iter().copied().collect(),
-                    },
-                ));
-            }
-        }
-
-        vec![self.response(
-            src,
-            MessageBody::BroadcastOk(BroadcastOkBody {
-                in_reply_to: body.msg_id,
-            }),
-        )]
-    }
-
-    fn handle_read(&mut self, src: NodeId, body: ReadBody) -> Vec<Message<MessageBody>> {
-        vec![self.response(
-            src,
-            MessageBody::ReadOk(ReadOkBody {
-                in_reply_to: body.msg_id,
-                values: self.values.clone().into_iter().collect(),
-            }),
-        )]
-    }
-
-    fn handle_topology(&mut self, src: NodeId, body: TopologyBody) -> Vec<Message<MessageBody>> {
-        vec![self.response(
-            src,
-            MessageBody::TopologyOk(TopologyOkBody {
-                in_reply_to: body.msg_id,
-            }),
-        )]
-    }
-
-    fn handle_broadcast_ok(&mut self, body: BroadcastOkBody) -> Vec<Message<MessageBody>> {
-        self.retry_queue
-            .remove(|message| message.body.msg_id == body.in_reply_to);
-        vec![]
-    }
-}
-
-impl InitializedNode for BroadcastNode {
-    type RequestBody = MessageBody;
-    type ResponseBody = MessageBody;
-
-    fn new(id: NodeId, all_nodes: Box<[NodeId]>) -> Self {
-        let broadcast_delay = Duration::from_millis(
-            env::var("BROADCAST_DELAY_MS")
-                .unwrap_or("0".to_owned())
-                .parse()
-                .expect("BROADCAST_DELAY_MS must be an integer"),
-        );
+    fn new(
+        id: NodeId,
+        all_nodes: &[NodeId],
+        tx: MessageTransmitter<Payload>,
+        broadcast_delay: Duration,
+    ) -> Self {
+        let other_nodes = all_nodes.iter().filter(|&&n| n != id).copied().collect();
         Self {
             id,
-            all_nodes: all_nodes.to_vec(),
-            msg_ids: MessageIdGenerator::default(),
+            other_nodes,
+            tx,
             values: BTreeSet::default(),
             outbox: Outbox::new(broadcast_delay),
             retry_queue: RetryQueue::new(Duration::from_millis(250)),
         }
     }
 
-    fn handle(&mut self, request: Message<MessageBody>) -> Vec<Message<MessageBody>> {
-        use MessageBody::*;
-        match request.body {
-            Broadcast(body) => self.handle_broadcast(request.src, body),
-            Read(body) => self.handle_read(request.src, body),
-            Topology(body) => self.handle_topology(request.src, body),
-            BroadcastOk(body) => self.handle_broadcast_ok(body),
-            _ => vec![],
+    fn broadcast_destinations(&self, src: NodeId) -> Box<[NodeId]> {
+        if self.id == src || self.other_nodes.contains(&src) {
+            Box::new([])
+        } else {
+            self.other_nodes.clone()
         }
+    }
+
+    fn handle_broadcast(&mut self, Message { header, payload }: Message<BroadcastPayload>) {
+        let values: BTreeSet<Value> = payload.values.into_iter().collect();
+        let new_values: BTreeSet<Value> = values.difference(&self.values).copied().collect();
+        self.values.extend(&new_values);
+
+        let new_values: Vec<_> = new_values.into_iter().collect();
+        if !new_values.is_empty() {
+            for neighbor in self.broadcast_destinations(header.src) {
+                self.outbox.merge_or_push(self.tx.prepare(
+                    neighbor,
+                    None,
+                    BroadcastPayload {
+                        values: new_values.clone(),
+                    },
+                ));
+            }
+        }
+
+        self.tx.reply(&header, Payload::BroadcastOk);
+    }
+
+    fn handle_read(&mut self, header: &MessageHeader) {
+        self.tx.reply(
+            header,
+            Payload::ReadOk(ReadOkPayload {
+                values: self.values.clone().into_iter().collect(),
+            }),
+        );
+    }
+
+    fn handle_topology(&mut self, header: &MessageHeader) {
+        self.tx.reply(header, Payload::TopologyOk);
+    }
+
+    fn handle_broadcast_ok(&mut self, header: &MessageHeader) {
+        assert!(header.in_reply_to.is_some());
+        self.retry_queue
+            .remove(|message| message.header.msg_id == header.in_reply_to);
+    }
+}
+
+impl NodeState for BroadcastNode {
+    fn handle(mut self: Box<Self>, request: &str) -> Result<Box<dyn NodeState>> {
+        use Payload::*;
+        let Message { header, payload } = deserialize_message(request)?;
+        match payload {
+            Broadcast(payload) => self.handle_broadcast(Message { header, payload }),
+            Read => self.handle_read(&header),
+            Topology(_) => self.handle_topology(&header),
+            BroadcastOk => self.handle_broadcast_ok(&header),
+            _ => (),
+        }
+        Ok(self)
     }
 
     fn next_wake_up(&self) -> Option<Instant> {
@@ -198,19 +157,21 @@ impl InitializedNode for BroadcastNode {
         }
     }
 
-    fn wake_up(&mut self) -> Vec<Message<MessageBody>> {
-        let mut messages = vec![];
+    fn wake_up(mut self: Box<Self>) -> Result<Box<dyn NodeState>> {
         for message in self.outbox.pop_messages_need_sending() {
-            messages.push(message.clone().mapped());
+            self.tx.send_message(&message.clone().mapped());
             self.retry_queue.insert(message);
         }
-        messages.extend(
-            self.retry_queue
-                .retry_messages()
-                .into_iter()
-                .map(Message::mapped),
-        );
-        messages
+        for message in self
+            .retry_queue
+            .retry_messages()
+            .into_iter()
+            .map(Message::mapped)
+        {
+            self.tx.send_message(&message);
+        }
+
+        Ok(self)
     }
 }
 
@@ -224,25 +185,25 @@ mod outbox {
     use super::Message;
 
     #[derive(Default, Debug)]
-    pub struct Outbox<B> {
-        inner: VecDeque<OutboxEntry<B>>,
+    pub struct Outbox<P> {
+        inner: VecDeque<OutboxEntry<P>>,
         delay: Duration,
     }
 
     #[derive(Debug)]
-    struct OutboxEntry<B> {
-        message: Message<B>,
+    struct OutboxEntry<P> {
+        message: Message<P>,
         send_after: Instant,
     }
 
-    impl<B: AddAssign<B>> Outbox<B> {
-        pub fn merge_or_push(&mut self, message: Message<B>) {
+    impl<P: AddAssign<P>> Outbox<P> {
+        pub fn merge_or_push(&mut self, message: Message<P>) {
             if let Some(existing_entry) = self
                 .inner
                 .iter_mut()
-                .find(|e| e.message.dest == message.dest)
+                .find(|e| e.message.header.dest == message.header.dest)
             {
-                existing_entry.message.body += message.body;
+                existing_entry.message.payload += message.payload;
             } else {
                 self.inner.push_back(OutboxEntry {
                     message,
@@ -252,7 +213,7 @@ mod outbox {
         }
     }
 
-    impl<B> Outbox<B> {
+    impl<P> Outbox<P> {
         pub fn new(delay: Duration) -> Self {
             Self {
                 inner: VecDeque::default(),
@@ -264,7 +225,7 @@ mod outbox {
             self.inner.front().map(|entry| entry.send_after)
         }
 
-        pub fn pop_messages_need_sending(&mut self) -> Vec<Message<B>> {
+        pub fn pop_messages_need_sending(&mut self) -> Vec<Message<P>> {
             if let Some(last_idx) = self
                 .inner
                 .iter()
@@ -290,19 +251,19 @@ mod retry_queue {
     use super::Message;
 
     #[derive(Default, Debug)]
-    pub struct RetryQueue<B> {
-        inner: VecDeque<RetryEntry<B>>,
+    pub struct RetryQueue<P> {
+        inner: VecDeque<RetryEntry<P>>,
         backoff: Duration,
     }
 
     #[derive(Debug)]
-    struct RetryEntry<B> {
-        message: Message<B>,
+    struct RetryEntry<P> {
+        message: Message<P>,
         send_after: Instant,
         count: u8,
     }
 
-    impl<B: Clone> RetryQueue<B> {
+    impl<P: Clone> RetryQueue<P> {
         pub fn new(backoff: Duration) -> Self {
             Self {
                 inner: VecDeque::default(),
@@ -318,7 +279,7 @@ mod retry_queue {
             self.inner.front().map(|entry| entry.send_after)
         }
 
-        fn insert_entry(&mut self, entry: RetryEntry<B>) {
+        fn insert_entry(&mut self, entry: RetryEntry<P>) {
             match self
                 .inner
                 .binary_search_by(|e| e.send_after.cmp(&entry.send_after))
@@ -327,7 +288,7 @@ mod retry_queue {
             }
         }
 
-        pub fn insert(&mut self, message: Message<B>) {
+        pub fn insert(&mut self, message: Message<P>) {
             self.insert_entry(RetryEntry {
                 message,
                 send_after: self.backoff(0),
@@ -335,7 +296,7 @@ mod retry_queue {
             });
         }
 
-        pub fn remove(&mut self, mut predicate: impl FnMut(&Message<B>) -> bool) {
+        pub fn remove(&mut self, mut predicate: impl FnMut(&Message<P>) -> bool) {
             if let Some(idx) = self
                 .inner
                 .iter()
@@ -345,7 +306,7 @@ mod retry_queue {
             }
         }
 
-        pub fn retry_messages(&mut self) -> Vec<Message<B>> {
+        pub fn retry_messages(&mut self) -> Vec<Message<P>> {
             if let Some(last_idx) = self
                 .inner
                 .iter()
@@ -368,5 +329,17 @@ mod retry_queue {
 }
 
 fn main() -> anyhow::Result<()> {
-    run_node::<BroadcastNode>()
+    let broadcast_delay = Duration::from_millis(
+        env::var("BROADCAST_DELAY_MS")
+            .unwrap_or("0".to_owned())
+            .parse()?,
+    );
+    run_node(Box::new(move |init, tx| {
+        Box::new(BroadcastNode::new(
+            init.node_id,
+            &init.node_ids,
+            tx.into(),
+            broadcast_delay,
+        ))
+    }))
 }

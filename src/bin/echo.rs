@@ -1,54 +1,39 @@
+use anyhow::Result;
 use fly_into_the_maelstrom::*;
 use serde::{Deserialize, Serialize};
 
-#[derive(PartialEq, Eq, Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
-enum RequestBody {
-    Echo { msg_id: MessageId, echo: Box<str> },
+enum RequestPayload {
+    Echo { echo: String },
 }
 
-#[derive(PartialEq, Eq, Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
-enum ResponseBody {
-    EchoOk {
-        msg_id: MessageId,
-        in_reply_to: MessageId,
-        echo: Box<str>,
-    },
+enum ResponsePayload {
+    EchoOk { echo: String },
 }
 
 #[derive(Debug)]
 struct EchoNode {
-    id: NodeId,
-    msg_ids: MessageIdGenerator,
+    tx: MessageTransmitter<ResponsePayload>,
 }
 
-impl InitializedNode for EchoNode {
-    type RequestBody = RequestBody;
-    type ResponseBody = ResponseBody;
-
-    fn new(id: NodeId, _all_nodes: Box<[NodeId]>) -> Self {
-        Self {
-            id,
-            msg_ids: MessageIdGenerator::default(),
-        }
+impl NodeState for EchoNode {
+    fn handle(mut self: Box<Self>, request: &str) -> Result<Box<dyn NodeState>> {
+        let Message {
+            header,
+            payload: RequestPayload::Echo { echo },
+        } = deserialize_message(request)?;
+        self.tx.reply(&header, ResponsePayload::EchoOk { echo });
+        Ok(self)
     }
 
-    fn handle(&mut self, request: Message<RequestBody>) -> Vec<Message<ResponseBody>> {
-        let RequestBody::Echo { msg_id, echo } = request.body;
-        let response = Message {
-            src: self.id,
-            dest: request.src,
-            body: ResponseBody::EchoOk {
-                msg_id: self.msg_ids.next_id(),
-                in_reply_to: msg_id,
-                echo,
-            },
-        };
-        vec![response]
+    fn wake_up(self: Box<Self>) -> Result<Box<dyn NodeState>> {
+        Ok(self)
     }
 }
 
 fn main() -> anyhow::Result<()> {
-    run_node::<EchoNode>()
+    run_node(Box::new(|_, tx| Box::new(EchoNode { tx: tx.into() })))
 }

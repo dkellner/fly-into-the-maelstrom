@@ -5,6 +5,7 @@ use serde_with::{DeserializeFromStr, SerializeDisplay};
 
 const NODE_ID_LENGTH: usize = 8;
 
+/// A node's unique identifier within the network.
 // We want `NodeId` to be `Copy`. I opted for storing 8 ASCII bytes, but this
 // is an implementation detail. Because this is a private field, changing this
 // will not affect other parts of the code.

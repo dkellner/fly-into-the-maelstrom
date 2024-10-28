@@ -94,3 +94,12 @@ maelstrom-g-counter:
       --rate 100 \
       --time-limit 20 \
       --nemesis partition
+
+maelstrom-kafka-a:
+    cargo build --bin kafka && \
+    maelstrom test -w kafka \
+      --bin "$CARGO_TARGET_DIR/debug/kafka" \
+      --node-count 1 \
+      --concurrency 2n \
+      --time-limit 20 \
+      --rate 1000

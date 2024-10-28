@@ -88,7 +88,7 @@ maelstrom-broadcast-e:
 
 maelstrom-g-counter:
     cargo build --bin g-counter && \
-    BROADCAST_DELAY_MS=1000 maelstrom test -w g-counter \
+    maelstrom test -w g-counter \
       --bin "$CARGO_TARGET_DIR/debug/g-counter" \
       --node-count 3 \
       --rate 100 \
